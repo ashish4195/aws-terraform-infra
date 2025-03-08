@@ -1,0 +1,203 @@
+### Explanation of the Terraform Script
+
+##This Terraform script provisions a **highly scalable and reliable AWS infrastructure** with **IAM roles, CloudWatch monitoring, and Secrets Manager access**. Below is a breakdown of its key components:
+
+---
+
+### **1. Provider Configuration**
+```hcl
+provider "aws" {
+  region = "us-east-1"
+}
+```
+- Specifies AWS as the cloud provider.
+- Deploys resources in the **us-east-1** region.
+
+---
+
+### **2. IAM Role for EC2 Instances**
+- **IAM Role**: Allows EC2 instances to access CloudWatch and Secrets Manager.
+- **IAM Policy**: Grants EC2 the ability to send logs to CloudWatch and retrieve secrets from AWS Secrets Manager.
+
+```hcl
+resource "aws_iam_role" "ec2_role" {
+  name = "ec2-cloudwatch-secrets-role"
+
+  assume_role_policy = <<EOF
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Service": "ec2.amazonaws.com"
+        },
+        "Action": "sts:AssumeRole"
+      }
+    ]
+  }
+  EOF
+}
+```
+- **`assume_role_policy`** allows EC2 instances to assume this IAM role.
+
+```hcl
+resource "aws_iam_policy" "ec2_policy" {
+  name        = "EC2CloudWatchSecretsPolicy"
+  description = "Policy for EC2 to access CloudWatch and Secrets Manager"
+
+  policy = <<EOF
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "cloudwatch:PutMetricData",
+          "cloudwatch:GetMetricStatistics",
+          "cloudwatch:ListMetrics"
+        ],
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue"
+        ],
+        "Resource": "*"
+      }
+    ]
+  }
+  EOF
+}
+```
+- **Allows EC2 instances to:**
+  - Send metrics to CloudWatch.
+  - Read secrets from Secrets Manager.
+
+---
+
+### **3. VPC and Networking**
+- **VPC**: `10.0.0.0/16` CIDR range.
+- **Public Subnets** (for load balancer & app servers).
+- **Private Subnets** (for databases).
+- **Internet Gateway** for external connectivity.
+- **Route Tables** to allow internet traffic in public subnets.
+
+```hcl
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+}
+```
+- Creates a Virtual Private Cloud (VPC) to host resources.
+
+---
+
+### **4. Security Group**
+```hcl
+resource "aws_security_group" "web_sg" {
+  vpc_id = aws_vpc.main.id
+  
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+- Allows **HTTP traffic (port 80)** from anywhere.
+- Allows outbound traffic to any destination.
+
+---
+
+### **5. CloudWatch Logging**
+```hcl
+resource "aws_cloudwatch_log_group" "app_logs" {
+  name = "/aws/app/logs"
+}
+```
+- **CloudWatch Log Group** for application logs.
+
+---
+
+### **6. Load Balancer**
+```hcl
+resource "aws_lb" "app_lb" {
+  name               = "app-lb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.web_sg.id]
+  subnets           = [aws_subnet.public_subnet_1.id, aws_subnet.public_subnet_2.id]
+}
+```
+- **Application Load Balancer (ALB)** to distribute traffic across instances.
+
+```hcl
+resource "aws_lb_target_group" "app_tg" {
+  name     = "app-target-group"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+}
+```
+- **Target Group** where EC2 instances will register.
+
+---
+
+### **7. Auto Scaling & Launch Template**
+```hcl
+resource "aws_launch_template" "app_lt" {
+  name_prefix   = "app-server"
+  image_id      = "ami-12345678"
+  instance_type = "t3.micro"
+  iam_instance_profile { name = aws_iam_instance_profile.ec2_profile.name }
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.web_sg.id]
+  }
+
+  user_data = base64encode(<<-EOF
+              #!/bin/bash
+              sudo yum update -y
+              sudo yum install -y httpd awslogs
+              sudo systemctl start httpd
+              sudo systemctl enable httpd
+              echo "Hello from Terraform!" > /var/www/html/index.html
+              EOF
+            )
+}
+```
+- **EC2 Launch Template**:
+  - Uses **Amazon Linux AMI**.
+  - Installs Apache (`httpd`) and AWS CloudWatch Logs agent (`awslogs`).
+  - Assigns IAM role for CloudWatch and Secrets Manager access.
+
+---
+
+### **8. Output**
+```hcl
+output "load_balancer_dns" {
+  value = aws_lb.app_lb.dns_name
+}
+```
+- Prints the **Load Balancer's DNS name** after deployment.
+
+---
+
+### **Key Features**
+✅ **High Availability**: ALB distributes traffic across multiple subnets.  
+✅ **Scalability**: Auto Scaling Group ensures dynamic scaling of EC2 instances.  
+✅ **Security**: IAM role restricts access, and Security Groups control traffic.  
+✅ **Monitoring**: CloudWatch integration for logs and performance metrics.  
+✅ **Secrets Management**: EC2 instances can fetch secrets securely from AWS Secrets Manager.  
+
+---
